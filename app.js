@@ -1,11 +1,6 @@
 const express = require("express");
 const morgan = require("morgan");
 
-const connectDB = require("./helpers/connectDB");
-const conversationsRouter = require("./router/conversationsRouter");
-const messagesRouter = require("./router/messagesRouter");
-const usersRouter = require("./router/usersRouter");
-
 const app = express();
 const server = require("http").createServer(app);
 const io = require("socket.io")(server, {
@@ -14,10 +9,16 @@ const io = require("socket.io")(server, {
   },
 });
 
+const connectDB = require("./helpers/connectDB");
+const conversationsRouter = require("./router/conversationsRouter");
+const messagesRouter = require("./router/messagesRouter");
+const usersRouter = require("./router/usersRouter");
+const errorController = require("./controllers/errorController");
+
 require("dotenv").config();
 
 app.use(express.json());
-app.use(morgan("common"));
+app.use(morgan("dev"));
 
 app.use("/api/v1/conversations", conversationsRouter);
 app.use("/api/v1/messages", messagesRouter);
@@ -30,6 +31,9 @@ io.on("connection", (socket) => {
     name: "James Serengia",
   });
 });
+
+// Global error middleware
+app.use(errorController);
 
 // connect DB
 connectDB();

@@ -2,6 +2,7 @@
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const AppErrorHandler = require("../helpers/AppErrorHandler");
 
 const signToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -12,7 +13,7 @@ const signToken = (id) => {
 const createSendToken = (user, statusCode, res) => {
   const token = signToken(user._id);
 
-  const { _id: id, name, email, accountActivated, role, photo } = user;
+  const { _id: id, name, email, role, profilePicture } = user;
 
   const cookieOptions = {
     expires: new Date(
@@ -30,58 +31,51 @@ const createSendToken = (user, statusCode, res) => {
     status: "success",
     token,
     data: {
-      user: { id, name, email, accountActivated, role, photo },
+      user: { id, name, email, role, profilePicture },
     },
   });
 };
 
-exports.signup = async (req, res) => {
+exports.signup = async (req, res, next) => {
   try {
     const { name, email, password, passwordConfirm } = req.body;
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      return res.status(400).json({
-        status: "fail",
-        message:
+      return next(
+        new AppErrorHandler(
           "The email is already taken. Please signup with a different email.",
-      });
+          400
+        )
+      );
     }
 
     // Save unconfirmed user
-    await User.create({
+    const user = await User.create({
       name,
       email,
       password,
       passwordConfirm,
     });
 
-    res.status(200).json({
-      status: "success",
-      data: {
-        message: `Account created successfully.`,
-      },
-    });
+    //    Send success status
+    createSendToken(user, 201, res);
   } catch (error) {
-    res.status(500).json({
-      status: "fail",
-      message: "Something went wrong",
-    });
+    next(error);
   }
 };
 
 exports.login = async (req, res, next) => {
   try {
-    //  1. Check is email and password exists
+    //   Check is email and password exists
     const { email, password } = req.body;
     if (!email || !password) {
-      return res.status(400).json({
-        status: "fail",
-        message: "Please provide email and password",
-      });
+      return next(
+        new AppErrorHandler("Please provide email and password", 400)
+      );
     }
 
-    //  2. Check is email exists in DB
+    //  Check is email exists in DB
     const foundUser = await User.findOne({ email }).select("+password");
 
     const correct = await foundUser?.correctPassword(
@@ -93,31 +87,7 @@ exports.login = async (req, res, next) => {
       return next(new AppErrorHandler("Incorrect email or password.", 401));
     }
 
-    if (foundUser && !foundUser.accountActivated) {
-      // Trying to login with inactive account
-      if (foundUser.accountActivationDeadline > Date.now()) {
-        return next(
-          new AppErrorHandler(
-            `Please activate your account before logging in. Activation link was sent to: ${email} `,
-            400
-          )
-        );
-      }
-
-      // Trying to login when account is not activated and activation link expired
-      // Delete user to able them create a fresh account using their email
-      if (foundUser.accountActivationDeadline < Date.now()) {
-        await User.findOneAndDelete({ email });
-        return next(
-          new AppErrorHandler(
-            "Your account activation link expired. Please register again.",
-            400
-          )
-        );
-      }
-    }
-
-    // 3. Login and send token
+    // Login and send token
     createSendToken(foundUser, 200, res);
   } catch (error) {
     next(error);
@@ -165,9 +135,6 @@ exports.protect = async (req, res, next) => {
 
     console.log("LETS CHECK TOKEN>", token);
 
-    // Verify token
-    // const decoded = await promisify(jwt.verify)(token, process.env.JWT_SECRET);
-
     let decoded;
     jwt.verify(token, process.env.JWT_SECRET, function (err, decodedObj) {
       decoded = decodedObj;
@@ -212,15 +179,11 @@ exports.protect = async (req, res, next) => {
 exports.restrictTo = (...roles) => {
   return (req, res, next) => {
     if (!roles.includes(req.user.role)) {
-      return next(
-        new AppErrorHandler(
-          "You do no have permission to perform this action.",
-          403
-        )
-      );
+      return res.status(403).json({
+        status: "fail",
+        message: "You do no have permission to perform this action.",
+      });
     }
-
-    next();
   };
 };
 
@@ -233,9 +196,6 @@ exports.forgotPassword = async (req, res, next) => {
         new AppErrorHandler("There is no user with that email.", 404)
       );
     }
-
-    // Testing sms
-    // sendSMS();
 
     const resetToken = user.createPasswordResetToken();
     await user.save({ validateBeforeSave: false });
@@ -253,7 +213,7 @@ exports.forgotPassword = async (req, res, next) => {
       }
 
       // Send welcome email
-      await new Email(user, resetURL).sendPasswordReset();
+      // await new Email(user, resetURL).sendPasswordReset();
 
       res.status(200).json({
         status: "success",
@@ -336,62 +296,6 @@ exports.updatePassword = async (req, res, next) => {
     await user.save();
 
     createSendToken(user, 200, res);
-  } catch (error) {
-    next(error);
-  }
-};
-
-exports.googleLogin = async (req, res, next) => {
-  try {
-    const client = new OAuth2Client(process.env.GOOGLE_AUTH_CLIENT_ID);
-    const googleJWT = req.body.idToken;
-
-    const response = await client.verifyIdToken({
-      idToken: googleJWT,
-      audience: process.env.GOOGLE_AUTH_CLIENT_ID,
-    });
-
-    // eslint-disable-next-line no-unused-vars
-    const { email_verified, email, name, picture } = response.payload;
-
-    if (!email_verified) {
-      return next(
-        new AppErrorHandler(
-          "Your email is not verified. Please try with another email.",
-          401
-        )
-      );
-    }
-
-    if (email_verified) {
-      const user = await User.findOne({ email });
-
-      if (user) {
-        // Found an existing user, log them in
-        return createSendToken(user, 200, res);
-      }
-
-      const password = email + signToken();
-      const newUser = await User.create({
-        name,
-        email,
-        password,
-        passwordConfirm: password,
-      });
-
-      // Automatically activate their accounts
-      const updatedUser = await User.findOneAndUpdate(
-        { email },
-        { accountActivated: true },
-        { new: true }
-      );
-
-      // Send welcome email
-      const url = `${req.protocol}://${req.get("host")}/me`;
-      await new Email(updatedUser, url).sendWelcome();
-
-      createSendToken(newUser, 200, res);
-    }
   } catch (error) {
     next(error);
   }
