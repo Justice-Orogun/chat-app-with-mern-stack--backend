@@ -55,6 +55,7 @@ const sendDevelopmentErrors = (err, res) => {
 
 module.exports = (err, req, res, next) => {
   // const err = { ...error };
+  console.log("Triggered error", err);
 
   // eslint-disable-next-line no-param-reassign
   err.statusCode = err.statusCode || 500;

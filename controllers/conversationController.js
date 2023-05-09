@@ -1,6 +1,7 @@
+const AppErrorHandler = require("../helpers/AppErrorHandler");
 const Conversation = require("../models/Conversation");
 
-exports.postConversation = async (req, res) => {
+exports.postConversation = async (req, res, next) => {
   try {
     const conversation = await Conversation.create({
       members: [req.body.senderId, req.body.receiverId],
@@ -11,9 +12,23 @@ exports.postConversation = async (req, res) => {
       data: conversation,
     });
   } catch (error) {
-    res.status(500).json({
-      status: "fail",
-      message: "Something went wrong",
+    next(error);
+  }
+};
+
+exports.getConversations = async (req, res, next) => {
+  try {
+    const conversations = await Conversation.find({
+      members: { $in: [req.params.userId] },
     });
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        conversations,
+      },
+    });
+  } catch (error) {
+    next(error);
   }
 };
